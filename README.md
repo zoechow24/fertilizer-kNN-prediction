@@ -15,7 +15,12 @@ The data is loaded into separate dataframes using their URLs:
 * `fertilizer_recommendation.html` - knitted HTML report
 * `fertilizer-recommendation-validation-predicted.csv` - predictions for the validation dataset
 
-## Dependencies
+## Tools & Skills
+### Languages & Environment: 
+* R
+* RStudio
+  
+### Dependencies
 This project uses the following packages:
 * dplyr
 * caret
