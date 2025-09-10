@@ -16,6 +16,7 @@ The data is loaded into separate dataframes using their URLs:
 * `fertilizer-recommendation-validation-predicted.csv` - predictions for the validation dataset
 
 ## Dependencies
+This project uses the following packages:
 * dplyr
 * caret
 * kableExtra
