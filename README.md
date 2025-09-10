@@ -11,4 +11,21 @@ The data is loaded into separate dataframes using their URLs:
 * _Training Data_: [`fertilizer-recommendation.csv`](https://s3.us-east-2.amazonaws.com/artificium.us/datasets/fertilizer-recommendation.csv)
 * _Validation Data_: [`fertilizer-recommendation-validation.csv`](https://s3.us-east-2.amazonaws.com/artificium.us/datasets/fertilizer-recommendation-validation.csv)
 
+### Deliverables
+* `fertilizer_recommendation.Rmd` - R Notebook
+* `fertilizer_recommendation.html` - knitted HTML report
+* `fertilizer-recommendation-validation-predicted.csv` - predictions for the validation dataset
 
+## Methodology
+1. Load Data
+2. Explore Data
+3. Shape Data for kNN
+   * Identify predictors
+   * Encode categorical variables
+   * Scale data
+   * Create training/testing sets
+4. Train kNN
+5. Validate Model
+
+## Results
+The final predictions for the validation data is stored in the `.csv` file, which includes two columns: _X_ (observation ID) and _Fertilizer_. The knitted report could be found [here](https://zoechow24.github.io/fertilizer-kNN-prediction/fertilizer_recommendation.html)
