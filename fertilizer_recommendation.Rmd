@@ -1,0 +1,444 @@
+---
+title: "Fertilizer Recommendations"
+author: "Zoe Chow"
+date: "Summer 2025"
+output:
+  html_document:
+    df_print: paged
+subtitle: DA5030 / kNN Classification
+---
+## Part A: Configuration
+### Load Packages
+```{r LoadPack, warning=F, message=F}
+library(dplyr)
+library(caret)
+library(kableExtra)
+library(class)
+library(gmodels)
+```
+
+## Part B: Load Data
+To load the data, I saved the urls in the variables _train_ and _validation_. I then used the function `read.csv()` with the parameters `stringsAsFactors = F` and `header = T` to open the data from the urls. 
+```{r LoadCSV, warning=F}
+train <- "https://s3.us-east-2.amazonaws.com/artificium.us/datasets/fertilizer-recommendation.csv"
+train_df <- read.csv(train, stringsAsFactors = F, header = T)
+
+validation <- "https://s3.us-east-2.amazonaws.com/artificium.us/datasets/fertilizer-recommendation-validation.csv"
+val_df <- read.csv(validation, stringsAsFactors = F, header = T)
+```
+
+## Part C: Explore Data
+```{r ExploreData, warning=F}
+# Understand the structure of the data
+
+# Training Data
+str(train_df)
+
+# Validation Data
+str(val_df)
+```
+When evaluating the structure of the training and validation data files, we note that the training data has **`r ncol(train_df)`** columns while the validation dataset has only `r ncol(val_df)`. Both data files share the same **`r ncol(val_df)`** columns, which describe the climate and soil conditions. The training data includes additional columns for “Fertilizer” and “Remark”. As the objective of this practicum is to predict the fertilizer required for a particular crop, the “Remark” column, which describes the benefits of each fertilizer, can be ignored and removed. 
+
+```{r RemoveColumns, warning=F}
+# use dpylr so that I can remove specific columns based on the column name
+train_df <- train_df %>% select(-Remark) # remove Remark columns
+```
+
+Of the remaining columns, aside from “Soil”, “Crop”, and “Fertilizer”, the other columns are numeric. Therefore, we will need to encode the “Soil” and “Crop” columns and turn the “Fertilizer” column into factors. To determine how we would like to encode the categorical features, it is important for us to know how many categories are in each column.
+```{r CategoricalFeatures, warning=F}
+soil <- unique(train_df$Soil)
+crop <- unique(train_df$Crop)
+```
+There are **`r length(soil)`** number of categories in the _Soil_ column and **`r length(crop)`** number of categories in the _Crop_ column. 
+
+
+## Part D: Shape Data for kNN
+To prepare our data for kNN modeling, we need to convert the target variable to a factor, handle missing values and outliers, encode categorical features, scale numeric variables, and split the dataframe into  training and testing subsets.
+
+### Converting Target Variable to a Factor
+First, we will convert the target variable from characters to factors. This will help with kNN classification. 
+```{r AsFactor, warning=F}
+train_df$Fertilizer <- as.factor(train_df$Fertilizer)
+```
+
+
+### Missing Values
+```{r Missing, warning=F}
+# View if there are any missing values in the data
+num.Rows <- nrow(train_df)
+num.Cols <- ncol(train_df)
+
+found <- F
+
+# iterate through numeric columns
+for (c in 1:num.Cols){
+  missing.Values <- which(is.na(train_df[,c]) | train_df[,c] == "")
+  num.Missing.Values <- length(missing.Values)
+  if (num.Missing.Values > 0) {
+    cat("Column '", names(train_df)[c], "' has ", num.Missing.Values, " missing values")
+    found <- T #change found to True if there were misisng values
+  }
+}
+
+if (!found) {
+  cat("no missing values detected")
+}
+
+```
+Next, we will address the missing values in our dataset. As shown above, the missing values occur in the PH column. Since there are only `r length(which(is.na(train_df$PH)))` missing entries out of `r nrow(train_df)` observations (less than `r round(length(which(is.na(train_df$PH)))/nrow(train_df)*100,2)`% of the data), removing these rows will have a negligible impact on our analysis. Additionally, imputing the missing values could introduce bias, especially since the PH level appears to correlate more strongly with the target variable (Fertilizer).
+```{r ImputeMissing, warning=F}
+train_df <- train_df %>%
+  filter(!is.na(PH))
+```
+
+### Outliers
+After handling missing data, we will identify any outliers in the numeric features. To do this, I created a function that takes a dataframe and finds the numeric columns to iterate through. For each numeric column, the function determines the z-score of each data point and saves any values with a z-score greater than 3.0. The function then prints the column name and the values that are outliers.
+
+```{r IdentifyOutliers, warning=F}
+# Function for determining outliers
+find_outliers <- function(df){
+  
+  ## Determine numeric columns
+  numeric.cols <- sapply(df, is.numeric)
+  
+  ## Identify outliers 
+  for (c in 1:length(numeric.cols)) {
+    if (numeric.cols[c] == TRUE) {
+      
+      m <- mean(df[[c]], na.rm = T)
+      s <- sd(df[[c]], na.rm = T)
+      
+      outliers <- which(abs((m - df[,c]) / s) > 3.0)
+      
+      if (length(outliers) > 0) {
+        ## found outliers; replace with NA and impute later
+        cat("Found outliers in column '", names(df)[c], "': \n")
+        cat("   --> ", df[[c]][outliers], "\n\n")
+      }
+    }
+  }
+}
+
+# Identify outliers
+find_outliers(train_df)
+```
+From the code above, we can see that there are outliers in the _Temperature_, _Rainfall_, _PH_, and _Nitrogen_ columns. Next, I will inspect the data further to see if there is a trend within the outliers to decide how to handle them.  
+
+```{r InspectOutliers, warning=F}
+# Temperature
+train_df %>% filter((abs(Temperature - mean(Temperature))/sd(Temperature) > 3))
+
+# Rainfall
+train_df %>% filter((abs(Rainfall - mean(Rainfall))/sd(Rainfall) > 3))
+
+# PH
+train_df %>% filter((abs(PH - mean(PH))/sd(PH) > 3))
+
+# Nitrogen
+train_df %>% filter((abs(Nitrogen - mean(Nitrogen))/sd(Nitrogen) > 3))
+```
+From the analysis above, the outliers in _Temperature_, _PH_, and _Nitrogen_ appear to be associated with specific crops — namely Adzuki Beans, Moth Beans, and Rubber, respectively. Given this consistent pattern, these values may reflect natural variation within those crops rather than data errors. Therefore, I chose to retain these outliers.
+
+In contrast, the _Rainfall_ column has only three extreme outliers that do not show any clear association with crop type or other contextual variables. As these values may distort model performance without adding meaningful variation, I decided to remove them.
+```{r RemoveRainfallOutliers, warning=F}
+train_df <- train_df %>%
+  filter(abs(Rainfall - mean(Rainfall, na.rm = TRUE)) / sd(Rainfall, na.rm = TRUE) <= 3)
+```
+
+### Encoding Categorical Features
+Next, we will encode the categorical features _Soil_ and _Crop_. From our previous analysis, there are are **`r length(soil)`** number of categories in the _Soil_ column and **`r length(crop)`** number of categories in the _Crop_ column. As such, we will
+use one-hot encoding for the _Soil_ column and frequency encoding for the _Crop_ column. 
+
+The categories in _Soil_ are `r soil[1:4]`, and `r soil[5]`. To perform one-hot encoding, I will create 4 new columns corresponding to `r soil[1]`, `r soil[2]`, `r soil[3]`, and `r soil[4]`. Each column will contain a 1 if the observation belongs to that soil type, and 0 otherwise. If all four columns contain 0 for a given observation, it implies that the soil type is `r soil[5]`. 
+```{r Soil1Hot, warning=F}
+train_df <- train_df %>% 
+  mutate(
+    Loamy_Soil = ifelse(Soil == "Loamy Soil", 1, 0),
+    Peaty_Soil = ifelse(Soil == "Peaty Soil", 1, 0),
+    Acidic_Soil = ifelse(Soil == "Acidic Soil", 1, 0),
+    Neutral_Soil = ifelse(Soil == "Neutral Soil", 1, 0)
+  ) 
+```
+
+For frequency encoding, I create a new column, called "CropFreq", that counts the number of each unique category in the _Crop_ column. 
+```{r CropFreq, warning=F}
+train_df <- train_df %>%
+  group_by(Crop) %>%
+  mutate(CropFreq = n()) %>%
+  ungroup()
+```
+When using frequency encoding, I observed that many crop categories share the same frequency values. Despite this overlap, I opted for frequency encoding over one-hot encoding because one-hot encoding would create 31 additional binary columns, which is impractical and could lead to increased dimensionality in the dataset. While this choice may result in some loss of categorical specificity, it allows for a more computationally efficient representation suitable for the kNN algorithm.
+
+### Scaling Numeric Features
+I will now scale the numeric features using the z-score and store the scaled data and the target feature in a new dataframe. 
+```{r Scaling, warning=F}
+# Create data frame with the columns we want to normalize (all but one-hot encoded and target variable)
+train.scaled_df <- train_df[,c(2:9, 17)]
+
+# function for that takes a column and calculates z-score for each data point
+z.score_stand <- function(col){
+  return ((col - mean(col)) / sd(col))
+}
+
+# apply z.score_stand function for every column in the train.scaled_df
+train.scaled_df <- as.data.frame(lapply(train.scaled_df, z.score_stand))
+
+# add one-hot encoded and target feature to the scaled dataframe
+train.scaled_df <- train.scaled_df %>% 
+  mutate(
+    Loamy_Soil = train_df$Loamy_Soil,
+    Peaty_Soil = train_df$Peaty_Soil,
+    Acidic_Soil = train_df$Acidic_Soil,
+    Neutral_Soil = train_df$Neutral_Soil,
+    Fertilizer = train_df$Fertilizer
+  )
+```
+
+### Splitting Dataset
+Here we will split the data using the **caret** package. To ensure reproducibility of the randomized split, I will set a random seed using `set.seed()`. I will reserve 80% of the data for the training set and the remaining 20% of the data for the testing set I chose this proportion because it provides sufficient data for learning and a decent amount of data for evaluation. 
+```{r Split, warning=F}
+# Split the dataset into training and testing sets
+
+# set randomized seed
+set.seed(42)
+
+# determining index for 80% of the dataset
+trainIndex <- createDataPartition(train.scaled_df$Fertilizer, p = 0.8, list = FALSE)
+
+# creating training and testing set
+df.train <- train.scaled_df[trainIndex, ]
+df.test <- train.scaled_df[-trainIndex, ]
+```
+
+I will use `prop.table()` to validate that I have split the data correctly. 
+```{r EvalSplit, warning=F}
+trainprop <- prop.table(table(df.train$Fertilizer))
+valprop <- prop.table(table(df.test$Fertilizer))
+origprop <- prop.table(table(train.scaled_df$Fertilizer))
+
+proportion_df <- data.frame(
+  Fertilizer = names(trainprop),
+  Train = as.numeric(trainprop),
+  Test = as.numeric(valprop),
+  Original = as.numeric(origprop)
+)
+
+kbl(proportion_df,
+    caption = "Category Proportions") %>%
+  kable_styling()
+```
+From the table above, we can see that the subsets have been divided correctly. Each category for the target variable has similar proportions for each subset, indicating a balanced split. 
+
+## Part E: Train a kNN Model
+To train the kNN model, we will use the `knn()` function from the **class** package. First, we extract the target variable from both the training and testing sets. I have chosen to start with _k_ = 49 because the training set contains `r nrow(df.train)` samples, and a common rule of thumb is to begin with a _k_ value close to the square root of the number of training observations.
+```{r Train, warning=F}
+# Extract target variable from subsets
+train_wotv <- df.train %>% select(-Fertilizer)
+train_tv <- df.train$Fertilizer
+
+test_wotv <- df.test %>% select(-Fertilizer)
+test_tv <- df.test$Fertilizer
+
+# set k value
+k = 49 
+
+# train using kNN
+model <- knn(train=train_wotv, test=test_wotv, cl=train_tv, k=k)
+```
+
+We will now test the performance of the kNN model on the test data using a confusion matrix. To do this, we will use the `CrossTable()` function from the **gmodels** package, which displays a confusion matrix showing the counts of correct and incorrect predictions for each class by comparing the actual and predicted values. We will then calculate the overall accuracy using the formula:
+$$\text{Accuracy} = \frac{\text{Correct Predictions}}{\text{Total Predictions}} * 100$$
+
+```{r conf_matrix, warning=F, results=F}
+conf_mat <- CrossTable(x = test_tv, y = model, prop.chisq = F)
+```
+
+```{r viewconf_mat, warning=F}
+kable(conf_mat$t)
+```
+
+```{r AccuracyCheck, warning=F, results=F}
+# data from the confusion matrix
+totalCount <- sum(conf_mat$t)
+Balanced_NPK <- conf_mat$t[1,1]
+Compost <- conf_mat$t[2,2]
+DAP <- conf_mat$t[3,3]
+Lime <- conf_mat$t[6,4]
+MoP <- conf_mat$t[7,5]
+OF <- conf_mat$t[8,6]
+Urea <- conf_mat$t[9,7]
+WRF <- conf_mat$t[10,8]
+correctCount <- Balanced_NPK + Compost + DAP + Lime + MoP + OF + Urea + WRF
+
+# calculate percentage
+overall_accuracy <- round((correctCount)/totalCount * 100, 2)
+```
+The overall accuracy of my model is **`r overall_accuracy`%**. 
+
+This method is not ideal in this scenario because some categories in the target variable were not predicted at all. As we move on to finding the optimal _k_ value, I will use a simpler and more direct method to calculate the accuracy of the kNN model. Instead of relying on the confusion matrix to extract correct predictions, I will compare the predicted labels (`model`) to the actual labels (`test_tv`) using element-wise comparison. The number of correct predictions will be the number of matches between the two vectors. The overall accuracy is then calculated as:
+$$ \text{Accuracy} = \frac{\sum\text{(model = test_tv)}}{\text{total samples}} * 100$$
+```{r AccuracyCheck2.0, warning=F}
+overall_accuracy2.0 <- round(sum(model == test_tv)/length(test_tv) *100, 2)
+```
+Using the second method, the calculate overall accuracy is **`r overall_accuracy2.0`%**. This result indicates that the simplified comparison method produces an accuracy consistent with the first method based on the confusion matrix.
+
+Next, we will test various values of _k_ to determine the optimal one for our kNN model. I will use a range of _k_ values from 1 to 49, as 49 is approximately the square root of the training sample size (`r nrow(df.train)`), which is a common heuristic for setting the upper bound. To evaluate each _k_, I will create a data frame to store the accuracy results, which will be used for visualization. I will also identify the best-performing _k_ value along with its corresponding accuracy percentage.
+```{r OptimalK, warning=F}
+# initialize k and accuracy variables to store the most optimal k value and its accuracy
+k_best = 0
+a_best = 0 
+
+# initialize a dataframe to store the k values and the accuracy to observe trend
+df_accuracy <- data.frame(k = integer(), Accuracy = numeric())
+
+# iterate through k values
+for (k in 1:49){
+  model <- knn(train=train_wotv, test=test_wotv, cl=train_tv, k=k)
+  accuracy <- round(sum(model == test_tv)/length(test_tv) *100, 2)
+  df_accuracy <- rbind(df_accuracy, data.frame(k = k, Accuracy = accuracy))
+  
+  # replace a_best and k_best if accuracy is greater to store most optimal choice
+  if (accuracy > a_best){
+    a_best <- accuracy 
+    k_best <- k
+  }
+}
+
+# plot to see if it is neccessary to test any more k values
+plot(df_accuracy$k, df_accuracy$Accuracy,
+     xlab = "k-value", ylab = "Accuracy(%)", main = "kNN Accuracy vs. k")
+
+```
+
+According to my code above, the most optimal _k_ value is **`r k_best`** with an accuracy of **`r a_best`%**. As shown in the accuracy plot, performance increases up to a point and then begins to plateau. This suggests that increasing _k_ further is unlikely to improve model performance. Therefore, we do not need to test additional _k_ values beyond this range. To further evaluate the model, I will examine the confusion matrix to ensure that all categories of the target variable are represented in the predictions and assess class-wise prediction performance.
+
+```{r k2optimal, warning=F, results=F}
+# examine if all categories are included
+model <- knn(train=train_wotv, test=test_wotv, cl=train_tv, k=k_best)
+conf_mat2 <- CrossTable(x = test_tv, y = model, prop.chisq = F)
+```
+
+```{r viewconf_mat3, warning=F}
+kable(conf_mat2$t)
+```
+
+Using the optimal _k_ value, the confusion matrix shows that most predictions lie along the diagonal, indicating a good match between actual and predicted labels. However, some categories have notably fewer observations, revealing class imbalance. This imbalance likely contributes to lower predictive accuracy for those underrepresented classes. Additionally, I observed that when _k_ exceeds 15, the model fails to predict all categories. This is likely due to over-smoothing, where increasing _k_ too much causes the model to generalize excessively, overlooking smaller or less distinct classes. Moving forward, I will be mindful of this behavior to ensure that important patterns in the data are not lost.
+
+## Part F: Validate Model
+To perform kNN prediction on the validation data, I must first preprocess the validation set in the same way as the training data. This includes applying the same normalization method, encoding categorical variables consistently, and ensuring the feature set is aligned. This step is crucial to ensure the model interprets the validation data correctly and produces reliable predictions.
+
+### Handle Missing Data
+```{r val_missing, warning = F}
+# missing
+# View if there are any missing values in the data
+num.Rows <- nrow(val_df)
+num.Cols <- ncol(val_df)
+
+found <- F
+
+# iterate through numeric columns
+for (c in 1:num.Cols){
+  missing.Values <- which(is.na(val_df[,c]) | val_df[,c] == "")
+  num.Missing.Values <- length(missing.Values)
+  if (num.Missing.Values > 0) {
+    cat("Column '", names(val_df)[c], "' has ", num.Missing.Values, " missing values")
+    found <- T #change found to True if there were misisng values
+  }
+}
+
+if (!found) {
+  cat("no missing values detected")
+}
+```
+To handle the missing value, I decided to impute it using the 10% trimmed mean calculated within each group of Crop and Soil type. Given that the validation dataset contains only 200 observations, removing any data points could reduce the representativeness of the data and potentially introduce bias. Imputing within these specific groups helps preserve contextual information while minimizing the influence of outliers.
+```{r val_handleMissing, warning=F}
+val_df <- val_df %>% 
+  group_by(Crop, Soil) %>%
+  mutate(
+    PH = ifelse(is.na(PH), mean(PH, trim=0.1, na.rm=T), PH)
+  ) %>%
+  ungroup
+```
+
+### Outliers 
+```{r val_outliers, warning=F}
+# Identify outliers
+find_outliers(val_df)
+```
+To find the outliers in the validation dataset, I utilized the function I previously made: `find_outliers()`. The results indicated that there are outliers in the _Rainfall_ and _PH_ columns. Next, I inspect the data for these columns in further detail to determine how I would like to handle the outliers. 
+
+```{r InspectOutliers2, warning=F}
+# Rainfall
+val_df %>% filter((abs(Rainfall - mean(Rainfall))/sd(Rainfall) > 3))
+
+# PH
+val_df %>% filter((abs(PH - mean(PH))/sd(PH) > 3))
+
+val_df %>% group_by(Crop, Soil) %>% filter((abs(Rainfall - mean(Rainfall))/sd(Rainfall) > 3))
+val_df %>% group_by(Crop, Soil) %>% filter((abs(PH - mean(PH))/sd(PH) > 3))
+```
+Upon inspecting the outliers, I observed that they consistently appear with the same Soil and Crop types. When I grouped the data by Crop and Soil before identifying outliers, these values no longer appeared as outliers. This suggests that they are not true anomalies but rather valid and meaningful data points within their specific context. Therefore, I will keep these data points for analysis. 
+
+### Encoding
+I will apply the same encoding methods used for the training dataset.
+```{r Encode, warning=F}
+val_df <- val_df %>% 
+  # one-hot encoding for Soil
+  mutate(
+    Loamy_Soil = ifelse(Soil == "Loamy Soil", 1, 0),
+    Peaty_Soil = ifelse(Soil == "Peaty Soil", 1, 0),
+    Acidic_Soil = ifelse(Soil == "Acidic Soil", 1, 0),
+    Neutral_Soil = ifelse(Soil == "Neutral Soil", 1, 0)
+  ) %>%
+  
+  # Frequency encoding for Crop
+  group_by(Crop) %>%
+  mutate(CropFreq = n()) %>%
+  ungroup()
+```
+
+
+### Scaling Numeric Features
+I will now scale the numeric features using the z-score and store the scaled data and the target feature in a new dataframe. I will also add the one-hot encoded categorical feautures afted scaling. 
+```{r ValScaling, warning=F}
+# Create data frame with the columns we want to normalize
+val.scaled_df <- val_df %>% select(c(2:9, 16))
+
+# apply z.score_stand function for every column in the train.scaled_df
+val.scaled_df <- as.data.frame(lapply(val.scaled_df, z.score_stand))
+
+# add one-hot encoded categorical features into scaled dataframe
+val.scaled_df <- val.scaled_df %>% 
+  mutate(
+    Loamy_Soil = val_df$Loamy_Soil,
+    Peaty_Soil = val_df$Peaty_Soil,
+    Acidic_Soil = val_df$Acidic_Soil,
+    Neutral_Soil = val_df$Neutral_Soil,
+    Fertilizer = val_df$Fertilizer
+  )
+```
+
+### Make Prediction
+Now that we have shaped the validation data, we can predict the Fertilizer of the data points using the knn model we previously built. 
+```{r PredictFertilizer, warning=F}
+predicted_fertilizer <- knn(train=train_wotv, test=val.scaled_df, cl=train_tv, k=k_best)
+```
+
+After predicting the Fertilizer for each data point, we can create a new data frame that includes the observation ID (from the "X" column) along with the predicted Fertilizer category.
+```{r CreateDF, warning=F}
+val.predicted_df <- data.frame(
+  X = val_df$X,
+  Fertilizer = predicted_fertilizer
+)
+```
+
+### Save to CSV file
+Lastly, we will save our prediction in a new CSV file. 
+```{r SaveCSV, warning=F}
+write.csv(val.predicted_df, "fertilizer-recommendation-validation-predicted.csv", row.names = F)
+```
+
+
+
+
+
