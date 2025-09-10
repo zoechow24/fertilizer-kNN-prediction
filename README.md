@@ -20,7 +20,7 @@ The data is loaded into separate dataframes using their URLs:
 * R
 * RStudio
   
-### Dependencies
+### Dependencies:
 This project uses the following packages:
 * dplyr
 * caret
