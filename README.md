@@ -15,6 +15,13 @@ The data is loaded into separate dataframes using their URLs:
 * `fertilizer_recommendation.html` - knitted HTML report
 * `fertilizer-recommendation-validation-predicted.csv` - predictions for the validation dataset
 
+## Dependencies
+* dplyr
+* caret
+* kableExtra
+* class
+* gmodels
+
 ## Methodology
 1. Load Data
 2. Explore Data
